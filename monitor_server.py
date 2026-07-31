@@ -272,7 +272,9 @@ def scalpx_proxy(subpath=""):
 <script>
 (function(){
   function poll(){
-    fetch('/commands').then(function(r){return r.json()}).then(function(data){
+    try {
+      var raw = MonitorBridge.getCommands();
+      var data = JSON.parse(raw);
       var cmds = data.commands || [];
       for(var i=0;i<cmds.length;i++){
         var d = cmds[i];
@@ -284,7 +286,7 @@ def scalpx_proxy(subpath=""):
           try{ eval(d.js); }catch(err){ console.error(err); }
         }
       }
-    }).catch(function(){});
+    } catch(e){}
   }
   setInterval(poll, 2000);
   poll();

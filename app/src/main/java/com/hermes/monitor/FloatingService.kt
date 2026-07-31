@@ -105,6 +105,20 @@ class FloatingService : Service() {
         @JavascriptInterface fun toggleMinimize() { Handler(Looper.getMainLooper()).post { toggleMinimize() } }
         @JavascriptInterface fun closeApp() { Handler(Looper.getMainLooper()).post { confirmClose() } }
         @JavascriptInterface fun toggleInteraction() { Handler(Looper.getMainLooper()).post { toggleInteractionMode() } }
+        @JavascriptInterface fun getCommands(): String {
+            try {
+                val url = URL("http://127.0.0.1:8787/commands")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                val reader = java.io.BufferedReader(java.io.InputStreamReader(conn.inputStream))
+                val result = reader.readText()
+                reader.close()
+                return result
+            } catch(e: Exception) {
+                return "{\"commands\":[]}"
+            }
+        }
     }
 
     private fun createFloatingView() {
