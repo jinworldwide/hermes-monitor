@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.view.*
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -28,9 +29,7 @@ class FloatingService : Service() {
     private lateinit var floatingView: FrameLayout
     private lateinit var webView: WebView
     private lateinit var touchOverlay: View
-    private lateinit var controlsOverlay: FrameLayout
     private var isMinimized = false
-    private var controlsVisible = false
     private var isDragging = false
     private var isPinching = false
     private var initialX = 0
@@ -41,8 +40,6 @@ class FloatingService : Service() {
     private var initialHeight = 0
     private var initialDist = 0f
     private var serverUrl = "http://127.0.0.1:8787"
-    private val longPressHandler = Handler(Looper.getMainLooper())
-    private var longPressPending = false
 
     companion object {
         private const val CHANNEL_ID = "hermes_monitor_floating"
@@ -55,7 +52,6 @@ class FloatingService : Service() {
         private const val MIN_W = 200
         private const val MIN_H = 150
         private const val CORNER_RADIUS = 24f
-        private const val LONG_PRESS_MS = 500L
         private const val DRAG_THRESHOLD = 10
     }
 
@@ -115,6 +111,17 @@ class FloatingService : Service() {
             .build()
     }
 
+    inner class MonitorBridge {
+        @JavascriptInterface
+        fun toggleMinimize() {
+            Handler(Looper.getMainLooper()).post { toggleMinimize() }
+        }
+        @JavascriptInterface
+        fun closeApp() {
+            Handler(Looper.getMainLooper()).post { stopSelf() }
+        }
+    }
+
     private fun createFloatingView() {
         floatingView = object : FrameLayout(this) {
             override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -129,7 +136,7 @@ class FloatingService : Service() {
         }
         floatingView.setBackgroundColor(0xFF0d1117.toInt())
 
-        // WebView — только контент, без тачей
+        // WebView
         webView = WebView(this)
         webView.apply {
             settings.javaScriptEnabled = true
@@ -145,7 +152,8 @@ class FloatingService : Service() {
             isFocusableInTouchMode = false
             isClickable = false
             isLongClickable = false
-            setOnTouchListener { _, _ -> false } // блокируем все тачи в WebView
+            setOnTouchListener { _, _ -> false }
+            addJavascriptInterface(MonitorBridge(), "MonitorBridge")
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = true
             }
@@ -156,49 +164,12 @@ class FloatingService : Service() {
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
-        // Прозрачный слой ПОВЕРХ WebView — ловит все тачи
+        // Прозрачный слой поверх WebView для жестов
         touchOverlay = View(this)
-        touchOverlay.setBackgroundColor(0x00000000.toInt()) // полностью прозрачный
+        touchOverlay.setBackgroundColor(0x00000000.toInt())
         touchOverlay.isClickable = true
         touchOverlay.isFocusable = false
 
-        // Controls overlay (тоже поверх, но показывается только при long press)
-        controlsOverlay = FrameLayout(this)
-        controlsOverlay.visibility = View.GONE
-
-        // Close button (красная, справа вверху)
-        val closeBtn = ImageView(this)
-        closeBtn.setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
-        closeBtn.setColorFilter(0xFFFFFFFF.toInt())
-        closeBtn.background = createCircleBg(0xCCFF0000.toInt())
-        closeBtn.scaleType = ImageView.ScaleType.CENTER
-        val closeParams = FrameLayout.LayoutParams(56, 56)
-        closeParams.gravity = Gravity.TOP or Gravity.END
-        closeParams.setMargins(0, 16, 16, 0)
-        closeBtn.layoutParams = closeParams
-        closeBtn.setOnClickListener { stopSelf() }
-        controlsOverlay.addView(closeBtn)
-
-        // Minimize button (серая, слева вверху)
-        val minBtn = ImageView(this)
-        minBtn.setImageResource(android.R.drawable.ic_menu_zoom)
-        minBtn.setColorFilter(0xFFFFFFFF.toInt())
-        minBtn.background = createCircleBg(0xCC333333.toInt())
-        minBtn.scaleType = ImageView.ScaleType.CENTER
-        val minParams = FrameLayout.LayoutParams(56, 56)
-        minParams.gravity = Gravity.TOP or Gravity.START
-        minParams.setMargins(16, 16, 0, 0)
-        minBtn.layoutParams = minParams
-        minBtn.setOnClickListener { toggleMinimize() }
-        controlsOverlay.addView(minBtn)
-
-        // Добавляем controlsOverlay ПОД touchOverlay, но поверх WebView
-        floatingView.addView(controlsOverlay, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-        ))
-
-        // touchOverlay — самый верхний слой
         floatingView.addView(touchOverlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -225,7 +196,7 @@ class FloatingService : Service() {
             y = (size.y - HEIGHT) / 2
         }
 
-        // Touch handling на touchOverlay
+        // Touch handling
         touchOverlay.setOnTouchListener { _, event ->
             when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN -> {
@@ -237,21 +208,10 @@ class FloatingService : Service() {
                     initialTouchY = event.rawY
                     initialWidth = params.width
                     initialHeight = params.height
-
-                    // Запускаем таймер long press
-                    longPressPending = true
-                    longPressHandler.postDelayed({
-                        if (longPressPending) {
-                            controlsVisible = !controlsVisible
-                            controlsOverlay.visibility = if (controlsVisible) View.VISIBLE else View.GONE
-                            longPressPending = false
-                        }
-                    }, LONG_PRESS_MS)
                     true
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     if (event.pointerCount >= 2) {
-                        longPressPending = false
                         isPinching = true
                         isDragging = false
                         initialDist = spacing(event)
@@ -274,7 +234,6 @@ class FloatingService : Service() {
                         val dy = (event.rawY - initialTouchY).toInt()
                         if (isDragging || Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
                             isDragging = true
-                            longPressPending = false
                             params.x = initialX + dx
                             params.y = initialY + dy
                             windowManager.updateViewLayout(floatingView, params)
@@ -283,22 +242,12 @@ class FloatingService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    longPressPending = false
-                    if (!isDragging && !isPinching) {
-                        // Простой тап — скрываем кнопки если видны
-                        if (controlsVisible) {
-                            controlsOverlay.visibility = View.GONE
-                            controlsVisible = false
-                        }
-                    }
                     isDragging = false
                     isPinching = false
                     true
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
-                    if (event.pointerCount <= 2) {
-                        isPinching = false
-                    }
+                    if (event.pointerCount <= 2) isPinching = false
                     true
                 }
                 else -> false
@@ -314,14 +263,6 @@ class FloatingService : Service() {
         return sqrt(x * x + y * y)
     }
 
-    private fun createCircleBg(color: Int): GradientDrawable {
-        return GradientDrawable().apply {
-            setShape(GradientDrawable.OVAL)
-            setSize(56, 56)
-            setColor(color)
-        }
-    }
-
     private fun toggleMinimize() {
         val params = floatingView.layoutParams as WindowManager.LayoutParams
         if (isMinimized) {
@@ -335,13 +276,10 @@ class FloatingService : Service() {
             webView.visibility = View.GONE
             isMinimized = true
         }
-        controlsOverlay.visibility = View.GONE
-        controlsVisible = false
         windowManager.updateViewLayout(floatingView, params)
     }
 
     override fun onDestroy() {
-        longPressHandler.removeCallbacksAndMessages(null)
         if (::floatingView.isInitialized) {
             windowManager.removeView(floatingView)
         }
