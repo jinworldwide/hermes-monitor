@@ -232,7 +232,7 @@ class FloatingService : Service() {
                     } else if (!isPinching) {
                         val dx = (event.rawX - initialTouchX).toInt()
                         val dy = (event.rawY - initialTouchY).toInt()
-                        if (isDragging || Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
+                        if (isDragging || abs(dx) > DRAG_THRESHOLD || abs(dy) > DRAG_THRESHOLD) {
                             isDragging = true
                             params.x = initialX + dx; params.y = initialY + dy
                             windowManager.updateViewLayout(outerContainer, params)
