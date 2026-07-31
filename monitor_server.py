@@ -393,8 +393,8 @@ function render(data) {
     }
     content.innerHTML = '<iframe src="' + v + '" allow="autoplay" allowfullscreen style="width:100%;height:100%;border:none;"></iframe>';
   } else if (data.type === 'webpage') {
-    // Load ScalpX directly so its JS works (polling script is injected by proxy)
-    window.location.href = data.content;
+    // Load in iframe (same-origin via proxy, so we can control it)
+    content.innerHTML = '<iframe id="scalpxFrame" src="' + data.content + '" style="width:100%;height:100%;border:none;"></iframe>';
   } else if (data.type === 'image') {
     content.innerHTML = '<img src="' + data.content + '" alt="" style="max-width:100%;max-height:100%;object-fit:contain;">';
   } else if (data.type === 'code') {
