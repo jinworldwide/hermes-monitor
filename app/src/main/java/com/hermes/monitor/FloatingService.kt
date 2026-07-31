@@ -442,23 +442,14 @@ class FloatingService : Service() {
 
     private fun sendText(text: String) {
         if (text.isBlank()) return
-        Thread {
-            try {
-                val url = URL("$serverUrl/keyboard_input")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                val w = OutputStreamWriter(conn.outputStream)
-                w.write("{\"text\":\"${text.replace("\"", "\\\"")}\"}")
-                w.flush(); w.close()
-                conn.responseCode
-                conn.disconnect()
-            } catch (_: Exception) {}
-        }.start()
-
+        // Send via WebView JavaScript — no HTTP connection needed
+        val escaped = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+        webView.post {
+            webView.evaluateJavascript(
+                "fetch('/keyboard_input', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:'$escaped'})}).catch(e=>{});",
+                null
+            )
+        }
         keyboardWindow?.let { windowManager.removeView(it) }
         keyboardWindow = null
     }
