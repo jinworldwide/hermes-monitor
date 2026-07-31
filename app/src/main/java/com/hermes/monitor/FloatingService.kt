@@ -58,8 +58,8 @@ class FloatingService : Service() {
         private const val MIN_CONTENT_H = 150
         private const val CORNER_RADIUS = 24f
         private const val DRAG_THRESHOLD = 10
-        private const val BTN_DIAMETER = 48
-        private const val BTN_HALF = BTN_DIAMETER / 2
+        private const val BTN_DIAMETER = 60
+        private const val OUTER_PAD = BTN_DIAMETER / 2  // 30dp gap between outer edge and content
         private const val CLOSE_CONFIRM_MS = 2000L
     }
 
@@ -107,13 +107,13 @@ class FloatingService : Service() {
     }
 
     private fun createFloatingView() {
-        // OUTER container — visible dark background, no clip
+        // OUTER container — dark background, no clip
         outerContainer = FrameLayout(this)
         outerContainer.setBackgroundColor(0xFF0d1117.toInt())
         outerContainer.clipChildren = false
         outerContainer.clipToPadding = false
 
-        // INNER content container — rounded corners on top of outer background
+        // INNER content container — rounded corners
         contentContainer = object : FrameLayout(this) {
             override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
                 super.onSizeChanged(w, h, oldw, oldh)
@@ -127,12 +127,12 @@ class FloatingService : Service() {
         }
         contentContainer.setBackgroundColor(0xFF0d1117.toInt())
 
-        // contentContainer fills outerContainer with margin = BTN_HALF
+        // contentContainer is smaller than outerContainer by OUTER_PAD on each side
         val ccParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         )
-        ccParams.setMargins(BTN_HALF, BTN_HALF, BTN_HALF, BTN_HALF)
+        ccParams.setMargins(OUTER_PAD, OUTER_PAD, OUTER_PAD, OUTER_PAD)
         outerContainer.addView(contentContainer, ccParams)
 
         // WebView
@@ -163,13 +163,15 @@ class FloatingService : Service() {
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
-        // 4 corner buttons — children of outerContainer, centered on corners
+        // 4 corner buttons — children of outerContainer, positioned at corners
+        // Each button is BTN_DIAMETER x BTN_DIAMETER, placed at the very corner of outerContainer
+        // Since contentContainer has OUTER_PAD margin, the button naturally overhangs the content
         addCornerButton(Gravity.START or Gravity.TOP, "▬", "Свернуть", "btn_minimize") { toggleMinimize() }
         addCornerButton(Gravity.END or Gravity.TOP, "✕", "Закрыть", "btn_close") { confirmClose() }
         addCornerButton(Gravity.START or Gravity.BOTTOM, "☰", "Взаимодействие", "btn_interact") { toggleInteractionMode() }
         addCornerButton(Gravity.END or Gravity.BOTTOM, "⌨", "Клавиатура", "btn_keyboard") { showKeyboardWindow() }
 
-        // Window params
+        // Window params — outer size = content + BTN_DIAMETER
         val display = windowManager.defaultDisplay
         val size = Point()
         display.getSize(size)
@@ -181,7 +183,8 @@ class FloatingService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -197,9 +200,10 @@ class FloatingService : Service() {
                     val y = event.y
                     val w = outerContainer.width
                     val h = outerContainer.height
-                    val inCornerZone = (x < BTN_DIAMETER || x > w - BTN_DIAMETER) &&
+                    // If touch is in button zone, let button handle it
+                    val onButton = (x < BTN_DIAMETER || x > w - BTN_DIAMETER) &&
                             (y < BTN_DIAMETER || y > h - BTN_DIAMETER)
-                    if (inCornerZone) return@setOnTouchListener false
+                    if (onButton) return@setOnTouchListener false
 
                     isDragging = false
                     isPinching = false
@@ -259,21 +263,14 @@ class FloatingService : Service() {
 
         val params = FrameLayout.LayoutParams(BTN_DIAMETER, BTN_DIAMETER)
         params.gravity = gravity
-        // Center on corner: half inside content area, half outside
-        when (gravity and Gravity.HORIZONTAL_GRAVITY_MASK) {
-            Gravity.START -> params.leftMargin = -BTN_HALF
-            Gravity.END -> params.rightMargin = -BTN_HALF
-        }
-        when (gravity and Gravity.VERTICAL_GRAVITY_MASK) {
-            Gravity.TOP -> params.topMargin = -BTN_HALF
-            Gravity.BOTTOM -> params.bottomMargin = -BTN_HALF
-        }
+        // No negative margins — button sits at the very corner of outerContainer
+        // Since contentContainer has OUTER_PAD margin, the button naturally overhangs the content
         btn.layoutParams = params
         btn.setOnClickListener { onClick() }
 
         val paint = android.graphics.Paint().apply {
             color = 0xFF8b949e.toInt()
-            textSize = 24f
+            textSize = 28f
             textAlign = android.graphics.Paint.Align.CENTER
             isAntiAlias = true
         }
