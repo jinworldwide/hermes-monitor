@@ -105,20 +105,44 @@ class FloatingService : Service() {
         @JavascriptInterface fun toggleMinimize() { Handler(Looper.getMainLooper()).post { toggleMinimize() } }
         @JavascriptInterface fun closeApp() { Handler(Looper.getMainLooper()).post { confirmClose() } }
         @JavascriptInterface fun toggleInteraction() { Handler(Looper.getMainLooper()).post { toggleInteractionMode() } }
-        @JavascriptInterface fun getCommands(): String {
-            try {
-                val url = URL("http://127.0.0.1:8787/commands")
-                val conn = url.openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 3000
-                conn.readTimeout = 3000
-                val reader = java.io.BufferedReader(java.io.InputStreamReader(conn.inputStream))
-                val result = reader.readText()
-                reader.close()
-                return result
-            } catch(e: Exception) {
-                return "{\"commands\":[]}"
+    }
+
+    private fun startCommandPoller() {
+        val handler = Handler(Looper.getMainLooper())
+        handler.post(object : Runnable {
+            override fun run() {
+                try {
+                    val url = URL("http://127.0.0.1:8787/commands")
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 2000
+                    conn.readTimeout = 2000
+                    val reader = java.io.BufferedReader(java.io.InputStreamReader(conn.inputStream))
+                    val result = reader.readText()
+                    reader.close()
+                    val data = org.json.JSONObject(result)
+                    val cmds = data.getJSONArray("commands")
+                    for (i in 0 until cmds.length()) {
+                        val cmd = cmds.getJSONObject(i)
+                        val action = cmd.optString("action", "")
+                        if (action == "click") {
+                            val selector = cmd.optString("selector", "")
+                            val js = """
+                                (function(){
+                                    var el = document.querySelector('$selector');
+                                    if(el) { el.click(); return 'ok'; }
+                                    return 'not found';
+                                })()
+                            """.trimIndent()
+                            webView.evaluateJavascript(js, null)
+                        } else if (action == "execute") {
+                            val js = cmd.optString("js", "")
+                            webView.evaluateJavascript(js, null)
+                        }
+                    }
+                } catch(e: Exception) { /* ignore */ }
+                handler.postDelayed(this, 2000)
             }
-        }
+        })
     }
 
     private fun createFloatingView() {
@@ -174,6 +198,7 @@ class FloatingService : Service() {
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
             }
             loadUrl(serverUrl)
+            startCommandPoller()
         }
         contentContainer.addView(webView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
