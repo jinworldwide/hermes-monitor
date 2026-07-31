@@ -27,6 +27,7 @@ class FloatingService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var floatingView: FrameLayout
     private lateinit var webView: WebView
+    private lateinit var touchOverlay: View
     private lateinit var controlsOverlay: FrameLayout
     private var isMinimized = false
     private var controlsVisible = false
@@ -128,7 +129,7 @@ class FloatingService : Service() {
         }
         floatingView.setBackgroundColor(0xFF0d1117.toInt())
 
-        // WebView — только просмотр, без фокуса
+        // WebView — только контент, без тачей
         webView = WebView(this)
         webView.apply {
             settings.javaScriptEnabled = true
@@ -142,7 +143,9 @@ class FloatingService : Service() {
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             isFocusable = false
             isFocusableInTouchMode = false
+            isClickable = false
             isLongClickable = false
+            setOnTouchListener { _, _ -> false } // блокируем все тачи в WebView
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = true
             }
@@ -153,11 +156,17 @@ class FloatingService : Service() {
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
-        // Controls overlay — появляется при долгом нажатии
+        // Прозрачный слой ПОВЕРХ WebView — ловит все тачи
+        touchOverlay = View(this)
+        touchOverlay.setBackgroundColor(0x00000000.toInt()) // полностью прозрачный
+        touchOverlay.isClickable = true
+        touchOverlay.isFocusable = false
+
+        // Controls overlay (тоже поверх, но показывается только при long press)
         controlsOverlay = FrameLayout(this)
         controlsOverlay.visibility = View.GONE
 
-        // Close button (красная)
+        // Close button (красная, справа вверху)
         val closeBtn = ImageView(this)
         closeBtn.setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
         closeBtn.setColorFilter(0xFFFFFFFF.toInt())
@@ -170,7 +179,7 @@ class FloatingService : Service() {
         closeBtn.setOnClickListener { stopSelf() }
         controlsOverlay.addView(closeBtn)
 
-        // Minimize button (серая)
+        // Minimize button (серая, слева вверху)
         val minBtn = ImageView(this)
         minBtn.setImageResource(android.R.drawable.ic_menu_zoom)
         minBtn.setColorFilter(0xFFFFFFFF.toInt())
@@ -183,7 +192,14 @@ class FloatingService : Service() {
         minBtn.setOnClickListener { toggleMinimize() }
         controlsOverlay.addView(minBtn)
 
+        // Добавляем controlsOverlay ПОД touchOverlay, но поверх WebView
         floatingView.addView(controlsOverlay, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        // touchOverlay — самый верхний слой
+        floatingView.addView(touchOverlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
@@ -209,8 +225,8 @@ class FloatingService : Service() {
             y = (size.y - HEIGHT) / 2
         }
 
-        // Touch handling
-        floatingView.setOnTouchListener { _, event ->
+        // Touch handling на touchOverlay
+        touchOverlay.setOnTouchListener { _, event ->
             when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN -> {
                     isDragging = false
@@ -228,6 +244,7 @@ class FloatingService : Service() {
                         if (longPressPending) {
                             controlsVisible = !controlsVisible
                             controlsOverlay.visibility = if (controlsVisible) View.VISIBLE else View.GONE
+                            longPressPending = false
                         }
                     }, LONG_PRESS_MS)
                     true
@@ -245,7 +262,6 @@ class FloatingService : Service() {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (isPinching && event.pointerCount >= 2) {
-                        // Pinch resize
                         val newDist = spacing(event)
                         val scale = newDist / initialDist
                         val newW = max(MIN_W, min(size.x, (initialWidth * scale).toInt()))
