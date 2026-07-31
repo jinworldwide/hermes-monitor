@@ -6,15 +6,17 @@ from flask import Flask, Response, request, render_template_string
 HOME = os.path.expanduser("~/.hermes-monitor")
 os.makedirs(HOME, exist_ok=True)
 
-TELEGRAM_BOT_TOKEN = "8558804095:AAHj5tQ5t5t5t5t5t5t5t5t5t5t5t5t5t5t5t5t5"
+TELEGRAM_BOT_TOKEN = ""
 TELEGRAM_CHAT_ID = "7123398337"
 
-env_path = os.path.expanduser("~/.hermes/profiles/trader/.env")
+# Load token from main Hermes config
+env_path = os.path.expanduser("~/.hermes/.env")
 if os.path.exists(env_path):
     with open(env_path) as f:
         for line in f:
             if line.startswith("TELEGRAM_BOT_TOKEN="):
                 TELEGRAM_BOT_TOKEN = line.strip().split("=", 1)[1]
+                break
 
 app = Flask(__name__)
 sse_clients = set()
@@ -23,12 +25,12 @@ sse_lock = threading.Lock()
 def sse_broadcast(data):
     with sse_lock:
         dead = set()
-        for q in sse_clients:
+        for q in list(sse_clients):
             try:
                 q.put_nowait(data)
             except:
                 dead.add(q)
-        sse_clients -= dead
+        sse_clients.difference_update(dead)
 
 @app.route("/")
 def index():
@@ -74,10 +76,12 @@ def keyboard_input():
     if not text.strip():
         return {"ok": False, "error": "empty text"}
     msg = f"📺 [МОНИТОР]: {text}"
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    # Save to a queue file that Hermes can poll
+    queue_path = os.path.join(HOME, "input_queue.txt")
     try:
-        r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
-        return {"ok": True, "sent": r.ok}
+        with open(queue_path, "a") as f:
+            f.write(msg + "\n")
+        return {"ok": True, "sent": True, "note": "queued"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

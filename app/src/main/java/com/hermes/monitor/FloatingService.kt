@@ -148,6 +148,8 @@ class FloatingService : Service() {
             settings.builtInZoomControls = false
             settings.displayZoomControls = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            // Desktop User-Agent for PC view
+            settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
             isFocusable = false
             isFocusableInTouchMode = false
             isClickable = false
