@@ -194,7 +194,7 @@ class FloatingService : Service() {
         }
 
         // Touch handling
-        touchListener = { _, event ->
+        touchListener = View.OnTouchListener { _, event ->
             when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN -> {
                     val x = event.x
@@ -204,7 +204,7 @@ class FloatingService : Service() {
                     // If touch is in button zone, let button handle it
                     val onButton = (x < BTN_DIAMETER || x > w - BTN_DIAMETER) &&
                             (y < BTN_DIAMETER || y > h - BTN_DIAMETER)
-                    if (onButton) return@setOnTouchListener false
+                    if (onButton) return@OnTouchListener false
 
                     isDragging = false
                     isPinching = false
@@ -232,7 +232,7 @@ class FloatingService : Service() {
                     } else if (!isPinching) {
                         val dx = (event.rawX - initialTouchX).toInt()
                         val dy = (event.rawY - initialTouchY).toInt()
-                        if (isDragging || abs(dx) > DRAG_THRESHOLD || abs(dy) > DRAG_THRESHOLD) {
+                        if (isDragging || dx > DRAG_THRESHOLD || dx < -DRAG_THRESHOLD || dy > DRAG_THRESHOLD || dy < -DRAG_THRESHOLD) {
                             isDragging = true
                             params.x = initialX + dx; params.y = initialY + dy
                             windowManager.updateViewLayout(outerContainer, params)
