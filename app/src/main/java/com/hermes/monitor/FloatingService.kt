@@ -28,7 +28,6 @@ class FloatingService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var floatingView: FrameLayout
     private lateinit var webView: WebView
-    private lateinit var touchOverlay: View
     private var isMinimized = false
     private var isDragging = false
     private var isPinching = false
@@ -40,6 +39,7 @@ class FloatingService : Service() {
     private var initialHeight = 0
     private var initialDist = 0f
     private var serverUrl = "http://127.0.0.1:8787"
+    private var interactionMode = false
 
     companion object {
         private const val CHANNEL_ID = "hermes_monitor_floating"
@@ -53,6 +53,8 @@ class FloatingService : Service() {
         private const val MIN_H = 150
         private const val CORNER_RADIUS = 24f
         private const val DRAG_THRESHOLD = 10
+        private const val BTN_SIZE = 44
+        private const val BTN_OVERHANG = 12
     }
 
     override fun onCreate() {
@@ -113,12 +115,15 @@ class FloatingService : Service() {
 
     inner class MonitorBridge {
         @JavascriptInterface
-        fun toggleMinimize() {
-            Handler(Looper.getMainLooper()).post { toggleMinimize() }
-        }
+        fun toggleMinimize() { Handler(Looper.getMainLooper()).post { toggleMinimize() } }
         @JavascriptInterface
-        fun closeApp() {
-            Handler(Looper.getMainLooper()).post { stopSelf() }
+        fun closeApp() { Handler(Looper.getMainLooper()).post { stopSelf() } }
+        @JavascriptInterface
+        fun toggleInteraction() {
+            Handler(Looper.getMainLooper()).post {
+                interactionMode = !interactionMode
+                updateInteractionMode()
+            }
         }
     }
 
@@ -135,6 +140,7 @@ class FloatingService : Service() {
             }
         }
         floatingView.setBackgroundColor(0xFF0d1117.toInt())
+        floatingView.clipChildren = false // buttons can protrude
 
         // WebView
         webView = WebView(this)
@@ -164,16 +170,16 @@ class FloatingService : Service() {
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
-        // Прозрачный слой поверх WebView для жестов
-        touchOverlay = View(this)
-        touchOverlay.setBackgroundColor(0x00000000.toInt())
-        touchOverlay.isClickable = true
-        touchOverlay.isFocusable = false
-
-        floatingView.addView(touchOverlay, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-        ))
+        // Corner buttons — added AFTER webView so they're on top
+        addCornerButton(Gravity.TOP or Gravity.START, "▬", "Свернуть") { toggleMinimize() }
+        addCornerButton(Gravity.TOP or Gravity.END, "✕", "Закрыть") { stopSelf() }
+        addCornerButton(Gravity.BOTTOM or Gravity.START, "☰", "Взаимодействие") {
+            interactionMode = !interactionMode
+            updateInteractionMode()
+        }
+        addCornerButton(Gravity.BOTTOM or Gravity.END, "⌨", "Клавиатура") {
+            webView.evaluateJavascript("showKeyboard()", null)
+        }
 
         // Window params
         val display = windowManager.defaultDisplay
@@ -196,10 +202,20 @@ class FloatingService : Service() {
             y = (size.y - HEIGHT) / 2
         }
 
-        // Touch handling
-        touchOverlay.setOnTouchListener { _, event ->
+        // Touch handling on floatingView itself — only for drag/pinch
+        // Buttons get their own touch events because they're children on top
+        floatingView.setOnTouchListener { _, event ->
             when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Check if touch is on a button area — if so, don't intercept
+                    val btnArea = BTN_SIZE + BTN_OVERHANG
+                    val x = event.x
+                    val y = event.y
+                    val w = floatingView.width
+                    val h = floatingView.height
+                    val onButton = (x < btnArea || x > w - btnArea) && (y < btnArea || y > h - btnArea)
+                    if (onButton) return@setOnTouchListener false
+
                     isDragging = false
                     isPinching = false
                     initialX = params.x
@@ -255,6 +271,95 @@ class FloatingService : Service() {
         }
 
         windowManager.addView(floatingView, params)
+    }
+
+    private fun addCornerButton(gravity: Int, text: String, desc: String, onClick: () -> Unit) {
+        val btn = object : ImageView(this) {
+            override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+                super.onSizeChanged(w, h, oldw, oldh)
+                // Shape matches corner
+                outlineProvider = object : ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: Outline) {
+                        val g = gravity and Gravity.HORIZONTAL_GRAVITY_MASK
+                        val v = gravity and Gravity.VERTICAL_GRAVITY_MASK
+                        if (g == Gravity.START && v == Gravity.TOP) {
+                            outline.setRoundRect(0, 0, w + BTN_OVERHANG, h + BTN_OVERHANG, CORNER_RADIUS.toFloat(), CORNER_RADIUS.toFloat(), 0f, 0f)
+                        } else if (g == Gravity.END && v == Gravity.TOP) {
+                            outline.setRoundRect(-BTN_OVERHANG, 0, w, h + BTN_OVERHANG, 0f, CORNER_RADIUS.toFloat(), 0f, 0f)
+                        } else if (g == Gravity.START && v == Gravity.BOTTOM) {
+                            outline.setRoundRect(0, -BTN_OVERHANG, w + BTN_OVERHANG, h, 0f, 0f, CORNER_RADIUS.toFloat(), CORNER_RADIUS.toFloat())
+                        } else {
+                            outline.setRoundRect(-BTN_OVERHANG, -BTN_OVERHANG, w, h, 0f, 0f, 0f, CORNER_RADIUS.toFloat())
+                        }
+                    }
+                }
+                clipToOutline = true
+            }
+        }
+        btn.contentDescription = desc
+        btn.isClickable = true
+        btn.isFocusable = false
+
+        // Dark gray background
+        val bg = GradientDrawable()
+        bg.setShape(GradientDrawable.RECTANGLE)
+        bg.setColor(0xFF2d2d2d.toInt())
+        btn.background = bg
+
+        // Lighter icon text
+        btn.setImageDrawable(null)
+        btn.setBackgroundColor(0xFF2d2d2d.toInt())
+
+        // Use a text label approach — draw the symbol
+        btn.setImageBitmap(null)
+
+        val params = FrameLayout.LayoutParams(BTN_SIZE, BTN_SIZE)
+        params.gravity = gravity
+
+        // Position to protrude outward
+        when (gravity and Gravity.HORIZONTAL_GRAVITY_MASK) {
+            Gravity.START -> params.leftMargin = -BTN_OVERHANG
+            Gravity.END -> params.rightMargin = -BTN_OVERHANG
+        }
+        when (gravity and Gravity.VERTICAL_GRAVITY_MASK) {
+            Gravity.TOP -> params.topMargin = -BTN_OVERHANG
+            Gravity.BOTTOM -> params.bottomMargin = -BTN_OVERHANG
+        }
+
+        btn.layoutParams = params
+        btn.setOnClickListener { onClick() }
+
+        // Draw the symbol as text on canvas
+        val paint = android.graphics.Paint().apply {
+            color = 0xFF8b949e.toInt()
+            textSize = 22f
+            textAlign = android.graphics.Paint.Align.CENTER
+            isAntiAlias = true
+        }
+
+        btn.post {
+            val bmp = android.graphics.Bitmap.createBitmap(btn.width, btn.height, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bmp)
+            val cx = btn.width / 2f
+            val cy = btn.height / 2f
+            val fontMetrics = paint.fontMetrics
+            val baseline = cy - (fontMetrics.ascent + fontMetrics.descent) / 2f
+            canvas.drawText(text, cx, baseline, paint)
+            btn.setImageBitmap(bmp)
+        }
+
+        floatingView.addView(btn)
+    }
+
+    private fun updateInteractionMode() {
+        webView.evaluateJavascript(
+            "window.interactionMode = $interactionMode; " +
+            "document.getElementById('content').style.pointerEvents = '${if (interactionMode) "auto" else "none"}'; " +
+            "document.querySelectorAll('.corner-btn').forEach(function(b){ " +
+            "  b.style.background = '${if (interactionMode) "#555" else "#2d2d2d"}'; " +
+            "  b.style.opacity = '${if (interactionMode) "1" else "0.6"}'; " +
+            "});", null
+        )
     }
 
     private fun spacing(event: MotionEvent): Float {
