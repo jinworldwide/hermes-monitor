@@ -107,14 +107,13 @@ class FloatingService : Service() {
     }
 
     private fun createFloatingView() {
-        // OUTER container — no clipToOutline, no clipChildren
-        // This is the WindowManager view. It is bigger than content by BTN_DIAMETER on each axis.
+        // OUTER container — visible dark background, no clip
         outerContainer = FrameLayout(this)
-        outerContainer.setBackgroundColor(0x00000000.toInt()) // fully transparent
+        outerContainer.setBackgroundColor(0xFF0d1117.toInt())
         outerContainer.clipChildren = false
         outerContainer.clipToPadding = false
 
-        // INNER content container — has rounded corners and dark background
+        // INNER content container — rounded corners on top of outer background
         contentContainer = object : FrameLayout(this) {
             override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
                 super.onSizeChanged(w, h, oldw, oldh)
@@ -128,7 +127,7 @@ class FloatingService : Service() {
         }
         contentContainer.setBackgroundColor(0xFF0d1117.toInt())
 
-        // Position contentContainer with margin so buttons sit in the gap
+        // contentContainer fills outerContainer with margin = BTN_HALF
         val ccParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -136,7 +135,7 @@ class FloatingService : Service() {
         ccParams.setMargins(BTN_HALF, BTN_HALF, BTN_HALF, BTN_HALF)
         outerContainer.addView(contentContainer, ccParams)
 
-        // WebView — fills contentContainer
+        // WebView
         webView = WebView(this)
         webView.apply {
             settings.javaScriptEnabled = true
@@ -170,7 +169,7 @@ class FloatingService : Service() {
         addCornerButton(Gravity.START or Gravity.BOTTOM, "☰", "Взаимодействие", "btn_interact") { toggleInteractionMode() }
         addCornerButton(Gravity.END or Gravity.BOTTOM, "⌨", "Клавиатура", "btn_keyboard") { showKeyboardWindow() }
 
-        // Window params — outer size = content + BTN_DIAMETER
+        // Window params
         val display = windowManager.defaultDisplay
         val size = Point()
         display.getSize(size)
@@ -182,8 +181,7 @@ class FloatingService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -191,7 +189,7 @@ class FloatingService : Service() {
             y = (size.y - outerH) / 2
         }
 
-        // Touch handling on outerContainer — drag/pinch on content area only
+        // Touch handling
         outerContainer.setOnTouchListener { _, event ->
             when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN -> {
@@ -199,7 +197,6 @@ class FloatingService : Service() {
                     val y = event.y
                     val w = outerContainer.width
                     val h = outerContainer.height
-                    // If touch is in button zone (corners), don't drag
                     val inCornerZone = (x < BTN_DIAMETER || x > w - BTN_DIAMETER) &&
                             (y < BTN_DIAMETER || y > h - BTN_DIAMETER)
                     if (inCornerZone) return@setOnTouchListener false
@@ -254,7 +251,6 @@ class FloatingService : Service() {
         btn.isFocusable = false
         btn.tag = tag
 
-        // Round shape
         val bg = GradientDrawable().apply {
             setShape(GradientDrawable.OVAL)
             setColor(0xFF2d2d2d.toInt())
@@ -263,7 +259,7 @@ class FloatingService : Service() {
 
         val params = FrameLayout.LayoutParams(BTN_DIAMETER, BTN_DIAMETER)
         params.gravity = gravity
-        // Center exactly on the corner: half inside, half outside
+        // Center on corner: half inside content area, half outside
         when (gravity and Gravity.HORIZONTAL_GRAVITY_MASK) {
             Gravity.START -> params.leftMargin = -BTN_HALF
             Gravity.END -> params.rightMargin = -BTN_HALF
@@ -275,7 +271,6 @@ class FloatingService : Service() {
         btn.layoutParams = params
         btn.setOnClickListener { onClick() }
 
-        // Draw symbol on canvas — lighter than background
         val paint = android.graphics.Paint().apply {
             color = 0xFF8b949e.toInt()
             textSize = 24f
@@ -331,7 +326,6 @@ class FloatingService : Service() {
         webView.evaluateJavascript(
             "document.getElementById('content').style.pointerEvents = '$pe';", null
         )
-        // Update button 3 visual state
         val btn3 = outerContainer.findViewWithTag<ImageView>("btn_interact")
         if (btn3 != null) {
             val bg = btn3.background as? GradientDrawable
@@ -406,9 +400,9 @@ class FloatingService : Service() {
             size.x, kbdH,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
