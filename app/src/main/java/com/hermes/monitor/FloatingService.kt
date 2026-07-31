@@ -6,26 +6,35 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.graphics.PixelFormat
 import android.graphics.Point
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
 import android.view.*
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import android.widget.TextView
+import android.widget.ImageView
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
 
 class FloatingService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var floatingView: FrameLayout
     private lateinit var webView: WebView
+    private lateinit var controlsOverlay: FrameLayout
     private var isMinimized = false
+    private var controlsVisible = false
     private var initialX = 0
     private var initialY = 0
     private var initialTouchX = 0f
     private var initialTouchY = 0f
+    private var initialWidth = 0
+    private var initialHeight = 0
+    private var initialDist = 0f
+    private var isPinching = false
     private var serverUrl = "http://127.0.0.1:8787"
 
     companion object {
@@ -36,6 +45,9 @@ class FloatingService : Service() {
         private const val WIDTH = 800
         private const val HEIGHT = 600
         private const val MINIMIZED_SIZE = 60
+        private const val MIN_W = 200
+        private const val MIN_H = 150
+        private const val CORNER_RADIUS = 24f
     }
 
     override fun onCreate() {
@@ -46,7 +58,6 @@ class FloatingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Load configurable URL from intent extra or SharedPreferences
         serverUrl = intent?.getStringExtra("server_url")?.trim()?.let { url ->
             if (url.isNotEmpty()) {
                 saveServerUrl(url)
@@ -56,12 +67,10 @@ class FloatingService : Service() {
             }
         } ?: loadServerUrl()
 
-        // Recreate view if already exists (e.g. after config change)
         if (::floatingView.isInitialized) {
             windowManager.removeView(floatingView)
         }
         createFloatingView()
-
         return START_STICKY
     }
 
@@ -69,9 +78,7 @@ class FloatingService : Service() {
 
     private fun saveServerUrl(url: String) {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_SERVER_URL, url)
-            .apply()
+            .edit().putString(KEY_SERVER_URL, url).apply()
     }
 
     private fun loadServerUrl(): String {
@@ -82,37 +89,38 @@ class FloatingService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Монитор",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Плавающее окно монитора"
-                setShowBadge(false)
-            }
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(channel)
+                CHANNEL_ID, "Монитор", NotificationManager.IMPORTANCE_LOW
+            ).apply { setShowBadge(false) }
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
         }
     }
 
     private fun createNotification(): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            Notification.Builder(this)
-        }
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
         return builder
             .setContentTitle("Монитор")
-            .setContentText("Плавающее окно активно • $serverUrl")
+            .setContentText("Плавающее окно активно")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setOngoing(true)
             .build()
     }
 
     private fun createFloatingView() {
-        val inflater = getSystemService(Context.LAYOUT_INFLATER_SERVICE) as LayoutInflater
-        floatingView = FrameLayout(this)
+        floatingView = object : FrameLayout(this) {
+            override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+                super.onSizeChanged(w, h, oldw, oldh)
+                outlineProvider = object : ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, CORNER_RADIUS)
+                    }
+                }
+                clipToOutline = true
+            }
+        }
+        floatingView.setBackgroundColor(0xFF0d1117.toInt())
 
-        // WebView — основной контент
+        // WebView — чистый контент, без взаимодействия
         webView = WebView(this)
         webView.apply {
             settings.javaScriptEnabled = true
@@ -120,15 +128,14 @@ class FloatingService : Service() {
             settings.loadWithOverviewMode = true
             settings.useWideViewPort = true
             settings.allowContentAccess = true
-            settings.setSupportZoom(true)
-            settings.builtInZoomControls = true
+            settings.setSupportZoom(false)
+            settings.builtInZoomControls = false
             settings.displayZoomControls = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            isFocusable = false
+            isFocusableInTouchMode = false
             webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                    view?.loadUrl(url ?: return false)
-                    return true
-                }
+                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = true
             }
             loadUrl(serverUrl)
         }
@@ -137,54 +144,40 @@ class FloatingService : Service() {
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
-        // Верхняя панель управления (полупрозрачная, поверх WebView)
-        val controlBar = FrameLayout(this)
-        controlBar.setBackgroundColor(0x88000000.toInt())
-        controlBar.elevation = 4f
-
-        // URL label
-        val urlLabel = TextView(this)
-        urlLabel.text = serverUrl
-        urlLabel.setTextColor(0xFF8B949E.toInt())
-        urlLabel.textSize = 10f
-        urlLabel.ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
-        urlLabel.isSingleLine = true
-        urlLabel.setPadding(8, 0, 0, 0)
-        val urlParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setMargins(8, 0, 0, 0)
-        }
-        controlBar.addView(urlLabel, urlParams)
-
-        // Minimize button
-        val minBtn = View(this)
-        minBtn.setBackgroundResource(android.R.drawable.ic_menu_zoom)
-        val minParams = FrameLayout.LayoutParams(36, 36)
-        minParams.gravity = Gravity.CENTER_VERTICAL or Gravity.END
-        minParams.setMargins(0, 0, 48, 0)
-        minBtn.layoutParams = minParams
-        minBtn.setOnClickListener { toggleMinimize() }
-        controlBar.addView(minBtn)
+        // Controls overlay — появляется при тапе
+        controlsOverlay = FrameLayout(this)
+        controlsOverlay.visibility = View.GONE
 
         // Close button
-        val closeBtn = View(this)
-        closeBtn.setBackgroundResource(android.R.drawable.ic_menu_close_clear_cancel)
-        val closeParams = FrameLayout.LayoutParams(36, 36)
-        closeParams.gravity = Gravity.CENTER_VERTICAL or Gravity.END
-        closeParams.setMargins(0, 0, 8, 0)
+        val closeBtn = ImageView(this)
+        closeBtn.setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+        closeBtn.setColorFilter(0xFFFFFFFF.toInt())
+        closeBtn.background = createCircleBg(0xCCFF0000.toInt())
+        closeBtn.scaleType = ImageView.ScaleType.CENTER
+        val closeParams = FrameLayout.LayoutParams(48, 48)
+        closeParams.gravity = Gravity.TOP or Gravity.END
+        closeParams.setMargins(0, 12, 12, 0)
         closeBtn.layoutParams = closeParams
         closeBtn.setOnClickListener { stopSelf() }
-        controlBar.addView(closeBtn)
+        controlsOverlay.addView(closeBtn)
 
-        val barParams = FrameLayout.LayoutParams(
+        // Minimize button
+        val minBtn = ImageView(this)
+        minBtn.setImageResource(android.R.drawable.ic_menu_zoom)
+        minBtn.setColorFilter(0xFFFFFFFF.toInt())
+        minBtn.background = createCircleBg(0xCC333333.toInt())
+        minBtn.scaleType = ImageView.ScaleType.CENTER
+        val minParams = FrameLayout.LayoutParams(48, 48)
+        minParams.gravity = Gravity.TOP or Gravity.START
+        minParams.setMargins(12, 12, 0, 0)
+        minBtn.layoutParams = minParams
+        minBtn.setOnClickListener { toggleMinimize() }
+        controlsOverlay.addView(minBtn)
+
+        floatingView.addView(controlsOverlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
-            44
-        )
-        controlBar.layoutParams = barParams
-        floatingView.addView(controlBar)
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
 
         // Window params
         val display = windowManager.defaultDisplay
@@ -207,20 +200,56 @@ class FloatingService : Service() {
             y = (size.y - HEIGHT) / 2
         }
 
-        // Drag handling (только по control bar)
-        controlBar.setOnTouchListener { _, event ->
-            when (event.action) {
+        // Touch handling — drag anywhere, pinch resize, tap for controls
+        floatingView.setOnTouchListener { _, event ->
+            when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x
                     initialY = params.y
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
+                    initialWidth = params.width
+                    initialHeight = params.height
+                    isPinching = false
+                    if (controlsVisible) {
+                        controlsOverlay.visibility = View.GONE
+                        controlsVisible = false
+                    }
+                    true
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    if (event.pointerCount >= 2) {
+                        isPinching = true
+                        initialDist = spacing(event)
+                        initialWidth = params.width
+                        initialHeight = params.height
+                    }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    params.x = initialX + (event.rawX - initialTouchX).toInt()
-                    params.y = initialY + (event.rawY - initialTouchY).toInt()
-                    windowManager.updateViewLayout(floatingView, params)
+                    if (isPinching && event.pointerCount >= 2) {
+                        val newDist = spacing(event)
+                        val scale = newDist / initialDist
+                        val newW = max(MIN_W, min(size.x, (initialWidth * scale).toInt()))
+                        val newH = max(MIN_H, min(size.y, (initialHeight * scale).toInt()))
+                        params.width = newW
+                        params.height = newH
+                        windowManager.updateViewLayout(floatingView, params)
+                    } else if (!isPinching) {
+                        params.x = initialX + (event.rawX - initialTouchX).toInt()
+                        params.y = initialY + (event.rawY - initialTouchY).toInt()
+                        windowManager.updateViewLayout(floatingView, params)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dx = (event.rawX - initialTouchX).toInt()
+                    val dy = (event.rawY - initialTouchY).toInt()
+                    if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && !isPinching) {
+                        controlsOverlay.visibility = View.VISIBLE
+                        controlsVisible = true
+                    }
+                    isPinching = false
                     true
                 }
                 else -> false
@@ -228,6 +257,20 @@ class FloatingService : Service() {
         }
 
         windowManager.addView(floatingView, params)
+    }
+
+    private fun spacing(event: MotionEvent): Float {
+        val x = event.getX(0) - event.getX(1)
+        val y = event.getY(0) - event.getY(1)
+        return sqrt(x * x + y * y)
+    }
+
+    private fun createCircleBg(color: Int): GradientDrawable {
+        return GradientDrawable().apply {
+            setShape(GradientDrawable.OVAL)
+            setSize(48, 48)
+            setColor(color)
+        }
     }
 
     private fun toggleMinimize() {
@@ -243,6 +286,8 @@ class FloatingService : Service() {
             webView.visibility = View.GONE
             isMinimized = true
         }
+        controlsOverlay.visibility = View.GONE
+        controlsVisible = false
         windowManager.updateViewLayout(floatingView, params)
     }
 
