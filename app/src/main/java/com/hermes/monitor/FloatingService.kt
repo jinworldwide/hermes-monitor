@@ -45,6 +45,7 @@ class FloatingService : Service() {
     private var serverUrl = "http://127.0.0.1:8787"
     private var interactionMode = false
     private var closePending = false
+    private var touchListener: View.OnTouchListener? = null
 
     companion object {
         private const val CHANNEL_ID = "hermes_monitor_floating"
@@ -151,7 +152,7 @@ class FloatingService : Service() {
             isFocusableInTouchMode = false
             isClickable = false
             isLongClickable = false
-            setOnTouchListener { _, _ -> false }
+            // No blanket touch blocker — interaction mode controls this
             addJavascriptInterface(MonitorBridge(), "MonitorBridge")
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = true
@@ -193,7 +194,7 @@ class FloatingService : Service() {
         }
 
         // Touch handling
-        outerContainer.setOnTouchListener { _, event ->
+        touchListener = { _, event ->
             when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN -> {
                     val x = event.x
@@ -244,6 +245,7 @@ class FloatingService : Service() {
                 else -> false
             }
         }
+        outerContainer.setOnTouchListener(touchListener)
 
         windowManager.addView(outerContainer, params)
     }
@@ -319,10 +321,29 @@ class FloatingService : Service() {
     }
 
     private fun updateInteractionMode() {
-        val pe = if (interactionMode) "auto" else "none"
-        webView.evaluateJavascript(
-            "document.getElementById('content').style.pointerEvents = '$pe';", null
-        )
+        val p = outerContainer.layoutParams as WindowManager.LayoutParams
+        if (interactionMode) {
+            // Remove NOT_FOCUSABLE so WebView can receive touches
+            p.flags = p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            // Remove touch listener from outerContainer — WebView gets touches directly
+            outerContainer.setOnTouchListener(null)
+            webView.isFocusable = true
+            webView.isFocusableInTouchMode = true
+            webView.isClickable = true
+            webView.isLongClickable = true
+            webView.requestFocus()
+        } else {
+            // Add NOT_FOCUSABLE back — outerContainer handles drag/pinch
+            p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            outerContainer.setOnTouchListener(touchListener)
+            webView.isFocusable = false
+            webView.isFocusableInTouchMode = false
+            webView.isClickable = false
+            webView.isLongClickable = false
+            webView.clearFocus()
+        }
+        windowManager.updateViewLayout(outerContainer, p)
+
         val btn3 = outerContainer.findViewWithTag<ImageView>("btn_interact")
         if (btn3 != null) {
             val bg = btn3.background as? GradientDrawable
