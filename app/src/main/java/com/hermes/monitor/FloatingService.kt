@@ -157,7 +157,7 @@ class FloatingService : Service() {
             // No blanket touch blocker — interaction mode controls this
             addJavascriptInterface(MonitorBridge(), "MonitorBridge")
             webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = true
+                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
             }
             loadUrl(serverUrl)
         }
