@@ -14,20 +14,25 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.*
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.FrameLayout
-import android.widget.ImageView
+import android.widget.*
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
 
 class FloatingService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var floatingView: FrameLayout
     private lateinit var webView: WebView
+    private var keyboardWindow: FrameLayout? = null
     private var isMinimized = false
     private var isDragging = false
     private var isPinching = false
@@ -55,6 +60,7 @@ class FloatingService : Service() {
         private const val DRAG_THRESHOLD = 10
         private const val BTN_SIZE = 44
         private const val BTN_OVERHANG = 12
+        private const val PADDING = BTN_OVERHANG + 4
     }
 
     override fun onCreate() {
@@ -140,7 +146,16 @@ class FloatingService : Service() {
             }
         }
         floatingView.setBackgroundColor(0xFF0d1117.toInt())
-        floatingView.clipChildren = false // buttons can protrude
+        floatingView.clipChildren = false
+        floatingView.clipToPadding = false
+
+        // Content area with padding so buttons sit at edges
+        val contentContainer = FrameLayout(this)
+        contentContainer.setPadding(PADDING, PADDING, PADDING, PADDING)
+        contentContainer.layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        )
 
         // WebView
         webView = WebView(this)
@@ -165,12 +180,13 @@ class FloatingService : Service() {
             }
             loadUrl(serverUrl)
         }
-        floatingView.addView(webView, FrameLayout.LayoutParams(
+        contentContainer.addView(webView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
+        floatingView.addView(contentContainer)
 
-        // Corner buttons — added AFTER webView so they're on top
+        // Corner buttons — at the very edges of floatingView (outside padding)
         addCornerButton(Gravity.TOP or Gravity.START, "▬", "Свернуть") { toggleMinimize() }
         addCornerButton(Gravity.TOP or Gravity.END, "✕", "Закрыть") { stopSelf() }
         addCornerButton(Gravity.BOTTOM or Gravity.START, "☰", "Взаимодействие") {
@@ -178,7 +194,7 @@ class FloatingService : Service() {
             updateInteractionMode()
         }
         addCornerButton(Gravity.BOTTOM or Gravity.END, "⌨", "Клавиатура") {
-            webView.evaluateJavascript("showKeyboard()", null)
+            showKeyboardWindow()
         }
 
         // Window params
@@ -187,7 +203,7 @@ class FloatingService : Service() {
         display.getSize(size)
 
         val params = WindowManager.LayoutParams(
-            WIDTH, HEIGHT,
+            WIDTH + PADDING * 2, HEIGHT + PADDING * 2,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else
@@ -198,16 +214,14 @@ class FloatingService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (size.x - WIDTH) / 2
-            y = (size.y - HEIGHT) / 2
+            x = (size.x - (WIDTH + PADDING * 2)) / 2
+            y = (size.y - (HEIGHT + PADDING * 2)) / 2
         }
 
-        // Touch handling on floatingView itself — only for drag/pinch
-        // Buttons get their own touch events because they're children on top
+        // Touch handling
         floatingView.setOnTouchListener { _, event ->
             when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN -> {
-                    // Check if touch is on a button area — if so, don't intercept
                     val btnArea = BTN_SIZE + BTN_OVERHANG
                     val x = event.x
                     val y = event.y
@@ -240,8 +254,8 @@ class FloatingService : Service() {
                     if (isPinching && event.pointerCount >= 2) {
                         val newDist = spacing(event)
                         val scale = newDist / initialDist
-                        val newW = max(MIN_W, min(size.x, (initialWidth * scale).toInt()))
-                        val newH = max(MIN_H, min(size.y, (initialHeight * scale).toInt()))
+                        val newW = max(MIN_W + PADDING * 2, min(size.x, (initialWidth * scale).toInt()))
+                        val newH = max(MIN_H + PADDING * 2, min(size.y, (initialHeight * scale).toInt()))
                         params.width = newW
                         params.height = newH
                         windowManager.updateViewLayout(floatingView, params)
@@ -300,23 +314,14 @@ class FloatingService : Service() {
         btn.isClickable = true
         btn.isFocusable = false
 
-        // Dark gray background
         val bg = GradientDrawable()
         bg.setShape(GradientDrawable.RECTANGLE)
         bg.setColor(0xFF2d2d2d.toInt())
         btn.background = bg
 
-        // Lighter icon text
-        btn.setImageDrawable(null)
-        btn.setBackgroundColor(0xFF2d2d2d.toInt())
-
-        // Use a text label approach — draw the symbol
-        btn.setImageBitmap(null)
-
         val params = FrameLayout.LayoutParams(BTN_SIZE, BTN_SIZE)
         params.gravity = gravity
 
-        // Position to protrude outward
         when (gravity and Gravity.HORIZONTAL_GRAVITY_MASK) {
             Gravity.START -> params.leftMargin = -BTN_OVERHANG
             Gravity.END -> params.rightMargin = -BTN_OVERHANG
@@ -329,7 +334,6 @@ class FloatingService : Service() {
         btn.layoutParams = params
         btn.setOnClickListener { onClick() }
 
-        // Draw the symbol as text on canvas
         val paint = android.graphics.Paint().apply {
             color = 0xFF8b949e.toInt()
             textSize = 22f
@@ -351,14 +355,140 @@ class FloatingService : Service() {
         floatingView.addView(btn)
     }
 
+    private fun showKeyboardWindow() {
+        // Remove existing keyboard window if any
+        keyboardWindow?.let { windowManager.removeView(it) }
+
+        val display = windowManager.defaultDisplay
+        val size = Point()
+        display.getSize(size)
+
+        // Get monitor position
+        val monitorParams = floatingView.layoutParams as WindowManager.LayoutParams
+        val monitorBottom = monitorParams.y + floatingView.height
+
+        // Create keyboard window BELOW the monitor
+        val kbdLayout = FrameLayout(this)
+        kbdLayout.setBackgroundColor(0xFF2d2d2d.toInt())
+        kbdLayout.elevation = 10f
+
+        // Rounded corners
+        kbdLayout.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, 16f)
+            }
+        }
+        kbdLayout.clipToOutline = true
+
+        val input = EditText(this)
+        input.apply {
+            hint = "Напиши что показать..."
+            setHintTextColor(0xFF8b949e.toInt())
+            setTextColor(0xFFc9d1d9.toInt())
+            setBackgroundResource(android.R.drawable.editbox_background)
+            background = GradientDrawable().apply {
+                setShape(GradientDrawable.RECTANGLE)
+                setColor(0xFF1a1a1a.toInt())
+                cornerRadius = 8f
+                setStroke(1, 0xFF404040.toInt())
+            }
+            setPadding(16, 12, 16, 12)
+            textSize = 16f
+            isFocusable = true
+            isFocusableInTouchMode = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
+            setOnEditorActionListener { _, action, _ ->
+                if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                    sendText(input.text.toString())
+                    true
+                } else false
+            }
+        }
+
+        val sendBtn = Button(this)
+        sendBtn.text = "➤"
+        sendBtn.setTextColor(0xFFc9d1d9.toInt())
+        sendBtn.setBackgroundColor(0xFF404040.toInt())
+        sendBtn.textSize = 18f
+        sendBtn.minimumWidth = 0
+        sendBtn.minimumHeight = 0
+        sendBtn.setPadding(20, 10, 20, 10)
+        sendBtn.setOnClickListener { sendText(input.text.toString()) }
+
+        val layout = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        layout.setMargins(12, 8, 12, 8)
+        kbdLayout.addView(input, layout)
+
+        val sendParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        sendParams.gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        sendParams.setMargins(0, 8, 12, 8)
+        kbdLayout.addView(sendBtn, sendParams)
+
+        val kbdHeight = 120
+        val kbdParams = WindowManager.LayoutParams(
+            size.x, kbdHeight,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else
+                WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = min(monitorBottom, size.y - kbdHeight)
+        }
+
+        windowManager.addView(kbdLayout, kbdParams)
+        keyboardWindow = kbdLayout
+
+        // Focus the input after a short delay
+        Handler(Looper.getMainLooper()).postDelayed({
+            input.requestFocus()
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        }, 200)
+    }
+
+    private fun sendText(text: String) {
+        if (text.isBlank()) return
+
+        // Send to server
+        Thread {
+            try {
+                val url = URL("$serverUrl/keyboard_input")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                val writer = OutputStreamWriter(conn.outputStream)
+                writer.write("{\"text\":\"${text.replace("\"", "\\\"")}\"}")
+                writer.flush()
+                writer.close()
+                conn.responseCode
+                conn.disconnect()
+            } catch (_: Exception) {}
+        }.start()
+
+        // Close keyboard window
+        keyboardWindow?.let { windowManager.removeView(it) }
+        keyboardWindow = null
+    }
+
     private fun updateInteractionMode() {
         webView.evaluateJavascript(
             "window.interactionMode = $interactionMode; " +
-            "document.getElementById('content').style.pointerEvents = '${if (interactionMode) "auto" else "none"}'; " +
-            "document.querySelectorAll('.corner-btn').forEach(function(b){ " +
-            "  b.style.background = '${if (interactionMode) "#555" else "#2d2d2d"}'; " +
-            "  b.style.opacity = '${if (interactionMode) "1" else "0.6"}'; " +
-            "});", null
+            "document.getElementById('content').style.pointerEvents = '${if (interactionMode) "auto" else "none"}';", null
         )
     }
 
@@ -371,8 +501,8 @@ class FloatingService : Service() {
     private fun toggleMinimize() {
         val params = floatingView.layoutParams as WindowManager.LayoutParams
         if (isMinimized) {
-            params.width = WIDTH
-            params.height = HEIGHT
+            params.width = WIDTH + PADDING * 2
+            params.height = HEIGHT + PADDING * 2
             webView.visibility = View.VISIBLE
             isMinimized = false
         } else {
@@ -385,6 +515,7 @@ class FloatingService : Service() {
     }
 
     override fun onDestroy() {
+        keyboardWindow?.let { windowManager.removeView(it) }
         if (::floatingView.isInitialized) {
             windowManager.removeView(floatingView)
         }
