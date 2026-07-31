@@ -159,7 +159,7 @@ class FloatingService : Service() {
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
             }
-            loadUrl(serverUrl)
+            loadUrl("http://127.0.0.1:8787/proxy/scalpx/screener/coins/")
         }
         contentContainer.addView(webView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
