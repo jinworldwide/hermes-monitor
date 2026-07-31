@@ -11,7 +11,8 @@
         android:icon="@mipmap/ic_launcher"
         android:label="Монитор"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Monitor">
+        android:theme="@style/Theme.Monitor"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
