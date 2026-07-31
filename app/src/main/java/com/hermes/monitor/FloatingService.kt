@@ -277,19 +277,19 @@ class FloatingService : Service() {
         val btn = object : ImageView(this) {
             override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
                 super.onSizeChanged(w, h, oldw, oldh)
-                // Shape matches corner
                 outlineProvider = object : ViewOutlineProvider() {
                     override fun getOutline(view: View, outline: Outline) {
                         val g = gravity and Gravity.HORIZONTAL_GRAVITY_MASK
                         val v = gravity and Gravity.VERTICAL_GRAVITY_MASK
+                        val r = CORNER_RADIUS
                         if (g == Gravity.START && v == Gravity.TOP) {
-                            outline.setRoundRect(0, 0, w + BTN_OVERHANG, h + BTN_OVERHANG, CORNER_RADIUS.toFloat(), CORNER_RADIUS.toFloat(), 0f, 0f)
+                            outline.setRoundRect(0, 0, w + BTN_OVERHANG, h + BTN_OVERHANG, r)
                         } else if (g == Gravity.END && v == Gravity.TOP) {
-                            outline.setRoundRect(-BTN_OVERHANG, 0, w, h + BTN_OVERHANG, 0f, CORNER_RADIUS.toFloat(), 0f, 0f)
+                            outline.setRoundRect(-BTN_OVERHANG, 0, w, h + BTN_OVERHANG, r)
                         } else if (g == Gravity.START && v == Gravity.BOTTOM) {
-                            outline.setRoundRect(0, -BTN_OVERHANG, w + BTN_OVERHANG, h, 0f, 0f, CORNER_RADIUS.toFloat(), CORNER_RADIUS.toFloat())
+                            outline.setRoundRect(0, -BTN_OVERHANG, w + BTN_OVERHANG, h, r)
                         } else {
-                            outline.setRoundRect(-BTN_OVERHANG, -BTN_OVERHANG, w, h, 0f, 0f, 0f, CORNER_RADIUS.toFloat())
+                            outline.setRoundRect(-BTN_OVERHANG, -BTN_OVERHANG, w, h, r)
                         }
                     }
                 }
